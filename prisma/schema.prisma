@@ -1,0 +1,173 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String?
+  avatar        String?
+  role          String   @default("employee") // "employee", "manager", "admin"
+  position      String?
+  department    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  managedTeams     Team[]
+  teamMemberships  TeamMember[]
+  reports          Report[]
+  notifications    Notification[]
+  retroParticipants RetroParticipant[]
+  comments         Comment[]
+}
+
+model Team {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  inviteCode  String   @unique @default(cuid())
+  managerId   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  manager    User         @relation(fields: [managerId], references: [id], onDelete: Cascade)
+  members    TeamMember[]
+  projects   Project[]
+  retros     Retro[]
+  reports    Report[]
+}
+
+model TeamMember {
+  id     String @id @default(cuid())
+  teamId String
+  userId String
+  role   String @default("member") // "member", "lead", "senior"
+  joinedAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  status      String   @default("active") // "active", "paused", "completed", "cancelled"
+  priority    String   @default("medium") // "low", "medium", "high", "critical"
+  startDate   DateTime?
+  endDate     DateTime?
+  teamId      String
+  parentId    String?  // для дерева зависимостей
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  team       Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  parent     Project? @relation("ProjectTree", fields: [parentId], references: [id])
+  children   Project[] @relation("ProjectTree")
+  reports    Report[]
+  milestones Milestone[]
+}
+
+model Milestone {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  dueDate     DateTime
+  completed   Boolean  @default(false)
+  projectId   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Report {
+  id          String   @id @default(cuid())
+  weekStart   DateTime // начало недели
+  weekEnd     DateTime // конец недели
+  content     String   // содержание отчета
+  status      String   @default("draft") // "draft", "submitted", "reviewed", "approved", "revision_needed"
+  aiSummary   String?  // AI-саммари
+  managerComment String?
+  authorId    String
+  teamId      String
+  projectId   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  author   User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  team     Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  project  Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  comments Comment[]
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  authorId  String
+  reportId  String
+  createdAt DateTime @default(now())
+
+  author User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  title     String
+  message   String
+  type      String   // "report_submitted", "report_reviewed", "deadline", "retro", "team_invite", "info"
+  read      Boolean  @default(false)
+  userId    String
+  link      String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Retro {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  date        DateTime
+  status      String   @default("planned") // "planned", "in_progress", "completed"
+  aiInsights  String?  // AI выводы
+  teamId      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  team          Team               @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  participants  RetroParticipant[]
+  items         RetroItem[]
+}
+
+model RetroParticipant {
+  id      String @id @default(cuid())
+  retroId String
+  userId  String
+  role    String @default("participant") // "facilitator", "participant"
+
+  retro Retro @relation(fields: [retroId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([retroId, userId])
+}
+
+model RetroItem {
+  id        String   @id @default(cuid())
+  category  String   // "went_well", "improve", "action_items", "ideas"
+  content   String
+  retroId   String
+  authorId  String
+  votes     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  retro Retro @relation(fields: [retroId], references: [id], onDelete: Cascade)
+}
