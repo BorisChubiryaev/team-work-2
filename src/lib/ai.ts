@@ -52,6 +52,24 @@ export async function analyzeReports(reportContents: string[]): Promise<string> 
   return callAI(messages)
 }
 
+export async function improveReport(content: string, templateFields: string[] = []): Promise<string> {
+  const templateHint = templateFields.length
+    ? `\n\nОжидаемый формат отчета: ${templateFields.join(', ')}.`
+    : ''
+
+  const messages: AIMessage[] = [
+    {
+      role: 'system',
+      content: 'Ты — редактор рабочих отчетов. Улучшай ясность, структуру и деловой стиль на русском языке. Сохраняй факты, не выдумывай прогресс, блокеры или даты. Верни только улучшенный текст отчета.',
+    },
+    {
+      role: 'user',
+      content: `Улучши этот отчет сотрудника:${templateHint}\n\n${content}`,
+    },
+  ]
+  return callAI(messages)
+}
+
 export async function analyzeRetro(items: { category: string; content: string; votes: number }[]): Promise<string> {
   const messages: AIMessage[] = [
     {

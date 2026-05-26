@@ -13,14 +13,19 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json()
     const { teamId, reportIds } = body
+    const userId = (session.user as { id: string }).id
 
     let reports
     if (reportIds && reportIds.length > 0) {
       reports = await db.report.findMany({
-        where: { id: { in: reportIds } },
+        where: { id: { in: reportIds }, team: { managerId: userId } },
         include: { author: true },
       })
     } else if (teamId) {
+      const team = await db.team.findUnique({ where: { id: teamId }, select: { managerId: true } })
+      if (!team || team.managerId !== userId) {
+        return NextResponse.json({ error: 'Нет прав для анализа отчетов команды' }, { status: 403 })
+      }
       reports = await db.report.findMany({
         where: { teamId, status: 'submitted' },
         include: { author: true },
@@ -41,15 +46,17 @@ export async function POST(req: NextRequest) {
 
     const summary = await analyzeReports(reportContents)
 
-    // Save AI summary to the latest report
-    if (reports.length > 0) {
-      await db.report.update({
-        where: { id: reports[0].id },
-        data: { aiSummary: summary },
-      })
-    }
+    const savedSummary = await db.reportSummary.create({
+      data: {
+        summary,
+        reportCount: reports.length,
+        teamId: reports[0].teamId,
+        managerId: userId,
+        filters: { reportIds: reports.map(r => r.id) },
+      },
+    })
 
-    return NextResponse.json({ summary, reportCount: reports.length })
+    return NextResponse.json({ summary, reportCount: reports.length, savedSummary })
   } catch (error) {
     console.error('Analyze reports error:', error)
     return NextResponse.json({ error: 'Ошибка AI-анализа отчетов' }, { status: 500 })

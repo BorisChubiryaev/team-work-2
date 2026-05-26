@@ -83,14 +83,16 @@ export async function GET(req: NextRequest) {
 
     // If no specific team, get all teams user belongs to
     if (!teamId) {
-      const userTeams = await db.teamMember.findMany({
-        where: { userId },
-        select: { teamId: true },
-      })
-      const managedTeams = await db.team.findMany({
-        where: { managerId: userId },
-        select: { id: true },
-      })
+      const [userTeams, managedTeams] = await Promise.all([
+        db.teamMember.findMany({
+          where: { userId },
+          select: { teamId: true },
+        }),
+        db.team.findMany({
+          where: { managerId: userId },
+          select: { id: true },
+        }),
+      ])
       const teamIds = [
         ...userTeams.map(t => t.teamId),
         ...managedTeams.map(t => t.id),

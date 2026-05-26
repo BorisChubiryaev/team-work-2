@@ -23,6 +23,8 @@ import {
   Brain,
   ChevronLeft,
   Filter,
+  Wand2,
+  Save,
 } from 'lucide-react'
 import { format, startOfWeek, endOfWeek } from 'date-fns'
 import { ru } from 'date-fns/locale'
@@ -57,6 +59,10 @@ export function ReportsPage() {
   const [selectedTeamId, setSelectedTeamIdLocal] = useState('')
   const [selectedProjectId, setSelectedProjectIdLocal] = useState('')
   const [commentText, setCommentText] = useState('')
+  const [editContent, setEditContent] = useState('')
+  const [templateOpen, setTemplateOpen] = useState(false)
+  const [templateName, setTemplateName] = useState('Еженедельный отчет')
+  const [templateFields, setTemplateFields] = useState('Промежуток времени\nПроект\nЧто сделано\nБлокеры\nПланы')
 
   const { data: teams } = useQuery({
     queryKey: ['teams'],
@@ -88,6 +94,27 @@ export function ReportsPage() {
     },
   })
 
+  const { data: templates } = useQuery({
+    queryKey: ['report-templates', selectedTeamId || 'all'],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      if (selectedTeamId) params.set('teamId', selectedTeamId)
+      const res = await fetch(`/api/report-templates?${params}`)
+      if (!res.ok) return []
+      return res.json()
+    },
+  })
+
+  const { data: summaries } = useQuery({
+    queryKey: ['report-summaries'],
+    enabled: isManager,
+    queryFn: async () => {
+      const res = await fetch('/api/reports/summaries')
+      if (!res.ok) return []
+      return res.json()
+    },
+  })
+
   const createReport = useMutation({
     mutationFn: async (data: { content: string; teamId: string; projectId?: string; weekStart: string; weekEnd: string }) => {
       const res = await fetch('/api/reports', {
@@ -105,7 +132,7 @@ export function ReportsPage() {
   })
 
   const updateReport = useMutation({
-    mutationFn: async ({ id, ...data }: { id: string; status?: string; managerComment?: string }) => {
+    mutationFn: async ({ id, ...data }: { id: string; status?: string; managerComment?: string; content?: string }) => {
       const res = await fetch(`/api/reports/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -144,9 +171,49 @@ export function ReportsPage() {
       })
       return res.json()
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['report-summaries'] })
+    },
+  })
+
+  const improveReport = useMutation({
+    mutationFn: async ({ content, teamId, reportId }: { content: string; teamId?: string; reportId?: string }) => {
+      const res = await fetch('/api/reports/improve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, teamId, reportId }),
+      })
+      if (!res.ok) throw new Error('Ошибка улучшения отчета')
+      return res.json()
+    },
+  })
+
+  const createTemplate = useMutation({
+    mutationFn: async () => {
+      const teamId = selectedTeamId || teams?.[0]?.id
+      if (!teamId) throw new Error('Нет команды')
+      const res = await fetch('/api/report-templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId,
+          name: templateName,
+          fields: templateFields.split('\n').map(field => field.trim()).filter(Boolean),
+        }),
+      })
+      if (!res.ok) throw new Error('Ошибка создания шаблона')
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['report-templates'] })
+      setTemplateOpen(false)
+    },
   })
 
   const selectedReport = reports?.find((r: { id: string }) => r.id === selectedReportId)
+  const currentUserId = (session?.user as { id?: string })?.id
+  const isSelectedReportAuthor = selectedReport?.authorId === currentUserId
+  const activeTemplate = templates?.[0]
   const now = new Date()
   const weekStart = startOfWeek(now, { weekStartsOn: 1 })
   const weekEnd = endOfWeek(now, { weekStartsOn: 1 })
@@ -183,9 +250,43 @@ export function ReportsPage() {
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="whitespace-pre-wrap text-sm bg-muted p-4 rounded-lg">
-              {selectedReport.content}
-            </div>
+            {isSelectedReportAuthor ? (
+              <div className="space-y-2">
+                <Textarea
+                  value={editContent || selectedReport.content}
+                  onChange={(event) => setEditContent(event.target.value)}
+                  rows={10}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    className="bg-emerald-600 hover:bg-emerald-700"
+                    onClick={() => updateReport.mutate({ id: selectedReport.id, content: editContent || selectedReport.content })}
+                    disabled={updateReport.isPending}
+                  >
+                    <Save className="h-4 w-4 mr-2" />
+                    Сохранить
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={async () => {
+                      const result = await improveReport.mutateAsync({
+                        content: editContent || selectedReport.content,
+                        reportId: selectedReport.id,
+                      })
+                      setEditContent(result.improvedContent)
+                    }}
+                    disabled={improveReport.isPending}
+                  >
+                    <Wand2 className="h-4 w-4 mr-2" />
+                    {improveReport.isPending ? 'Улучшаю...' : 'Улучшить с ИИ'}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="whitespace-pre-wrap text-sm bg-muted p-4 rounded-lg">
+                {selectedReport.content}
+              </div>
+            )}
 
             {selectedReport.managerComment && (
               <div className="bg-emerald-50 dark:bg-emerald-900/20 p-4 rounded-lg">
@@ -299,14 +400,57 @@ export function ReportsPage() {
         </div>
         <div className="flex gap-2">
           {isManager && (
-            <Button
-              variant="outline"
-              onClick={() => analyzeMutation.mutate()}
-              disabled={analyzeMutation.isPending}
-            >
-              <Brain className="h-4 w-4 mr-2" />
-              {analyzeMutation.isPending ? 'Анализ...' : 'AI Анализ'}
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                onClick={() => analyzeMutation.mutate()}
+                disabled={analyzeMutation.isPending}
+              >
+                <Brain className="h-4 w-4 mr-2" />
+                {analyzeMutation.isPending ? 'Суммаризация...' : 'Суммаризация отчетов'}
+              </Button>
+              <Dialog open={templateOpen} onOpenChange={setTemplateOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline">
+                    <FileText className="h-4 w-4 mr-2" />
+                    Формат отчета
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Формат отчета для команды</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    {teams?.length > 1 && (
+                      <Select value={selectedTeamId} onValueChange={setSelectedTeamIdLocal}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Выберите команду" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {teams.map((t: { id: string; name: string }) => (
+                            <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                    <Input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Название шаблона" />
+                    <Textarea
+                      value={templateFields}
+                      onChange={(event) => setTemplateFields(event.target.value)}
+                      rows={7}
+                      placeholder="Каждый блок с новой строки"
+                    />
+                    <Button
+                      className="w-full bg-emerald-600 hover:bg-emerald-700"
+                      onClick={() => createTemplate.mutate()}
+                      disabled={!templateName.trim() || !templateFields.trim() || createTemplate.isPending}
+                    >
+                      Сохранить формат
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </>
           )}
           <Dialog open={newReportOpen} onOpenChange={setNewReportOpen}>
             <DialogTrigger asChild>
@@ -349,11 +493,34 @@ export function ReportsPage() {
                   </SelectContent>
                 </Select>
                 <Textarea
-                  placeholder="Опишите вашу работу за неделю: что сделано, что в процессе, какие проблемы..."
+                  placeholder={activeTemplate ? `Заполните блоки: ${activeTemplate.fields?.join(', ')}` : 'Опишите вашу работу за неделю: что сделано, что в процессе, какие проблемы...'}
                   value={reportContent}
                   onChange={(e) => setReportContent(e.target.value)}
                   rows={8}
                 />
+                {activeTemplate && (
+                  <div className="rounded-md border p-3 text-sm">
+                    <p className="font-medium mb-2">{activeTemplate.name}</p>
+                    <div className="flex flex-wrap gap-2">
+                      {activeTemplate.fields?.map((field: string) => (
+                        <Badge key={field} variant="outline">{field}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={async () => {
+                    const teamId = selectedTeamId || teams?.[0]?.id
+                    const result = await improveReport.mutateAsync({ content: reportContent, teamId })
+                    setReportContent(result.improvedContent)
+                  }}
+                  disabled={!reportContent.trim() || improveReport.isPending}
+                >
+                  <Wand2 className="h-4 w-4 mr-2" />
+                  {improveReport.isPending ? 'Улучшаю...' : 'Улучшить отчет с помощью ИИ'}
+                </Button>
                 <Button
                   className="w-full bg-emerald-600 hover:bg-emerald-700"
                   onClick={() => {
@@ -391,6 +558,25 @@ export function ReportsPage() {
         </Card>
       )}
 
+      {isManager && summaries?.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Сохраненные саммари</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {summaries.slice(0, 3).map((item: { id: string; summary: string; reportCount: number; createdAt: string; team?: { name?: string } }) => (
+              <div key={item.id} className="rounded-md border p-3">
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <p className="text-sm font-medium">{item.team?.name || 'Команда'} · {item.reportCount} отчетов</p>
+                  <p className="text-xs text-muted-foreground">{new Date(item.createdAt).toLocaleDateString('ru-RU')}</p>
+                </div>
+                <p className="text-sm whitespace-pre-wrap line-clamp-4">{item.summary}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Filters */}
       <div className="flex items-center gap-2">
         <Filter className="h-4 w-4 text-muted-foreground" />
@@ -411,7 +597,7 @@ export function ReportsPage() {
       <div className="space-y-3">
         {reports?.map((report: {
           id: string; status: string; content: string; weekStart: string; weekEnd: string;
-          author?: { name?: string | null }; project?: { name: string }; managerComment?: string | null;
+          authorId?: string; author?: { name?: string | null }; project?: { name: string }; managerComment?: string | null;
         }) => (
           <Card
             key={report.id}

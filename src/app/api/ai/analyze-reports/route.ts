@@ -13,9 +13,15 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json()
     const { teamId } = body
+    const userId = (session.user as { id: string }).id
 
     if (!teamId) {
       return NextResponse.json({ error: 'Укажите teamId' }, { status: 400 })
+    }
+
+    const team = await db.team.findUnique({ where: { id: teamId }, select: { managerId: true } })
+    if (!team || team.managerId !== userId) {
+      return NextResponse.json({ error: 'Нет прав для анализа отчетов команды' }, { status: 403 })
     }
 
     const reports = await db.report.findMany({
@@ -34,8 +40,17 @@ export async function POST(req: NextRequest) {
     )
 
     const summary = await analyzeReports(reportContents)
+    const savedSummary = await db.reportSummary.create({
+      data: {
+        summary,
+        reportCount: reports.length,
+        teamId,
+        managerId: userId,
+        filters: { source: 'dashboard' },
+      },
+    })
 
-    return NextResponse.json({ summary, reportCount: reports.length })
+    return NextResponse.json({ summary, reportCount: reports.length, savedSummary })
   } catch (error) {
     console.error('AI analyze reports error:', error)
     return NextResponse.json({ error: 'Ошибка AI-анализа' }, { status: 500 })
